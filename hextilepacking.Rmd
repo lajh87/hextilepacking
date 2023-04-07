@@ -13,7 +13,8 @@ library(ggplot2)
 
 # Objective
 
-Create a 
+Create a diagram of tessellated hexagons the ranks hexagon tiles based on their
+distance from the centre.
 
 # Data 
 
@@ -99,11 +100,133 @@ hex_grid@data$rank <- rank(distance, ties.method = "first")
 
 ```
 
-Minimise the distance from the centre based on order.
+Rank the tiles based on distance from centre.
 
 ```{r}
+# Version 1
 ggplot(fortify(hex_grid)) + 
   geom_polygon(aes(long, lat, group = id), fill = NA, colour = "black") +
   geom_text(data = hex_grid@data, aes(label = rank, x = x1, y = y1))
+
+hex_grid@data <- hex_grid@data |>
+  dplyr::left_join(
+    df, by = c("rank" = "id")
+  )
 ```
 
+```{r}
+# Version 2
+hex_grid@data$rank2 <- rank(rgeos::gDistance(hex_grid, hex_grid_centre, byid = TRUE), ties.method = "first")
+ggplot(fortify(hex_grid)) + 
+  geom_polygon(aes(long, lat, group = id), fill = NA, colour = "black") +
+  geom_text(data = hex_grid@data, aes(label = rank2, x = x1, y = y1))
+```
+
+Join the data in and plot
+
+```{r}
+hex_grid2 <- hex_grid[!is.na(hex_grid@data$org),] 
+hex_grid2_gg <- fortify(hex_grid2)  |>
+  dplyr::left_join(hex_grid2@data |>
+                     dplyr::mutate(id = as.character(id)) |>
+                     dplyr:::select(id, cohort = group, rank2, org))
+
+ggplot(hex_grid2_gg) + 
+  geom_polygon(aes(long, lat, group = id, fill = as.factor(cohort)), colour = "black") +
+  geom_text(data = hex_grid2@data, aes(label = rank, x = x1, y = y1))
+```
+
+I may be able to get a better grouping (i.e. in concentric circles) if I de-tesselate the grid calculate distance then tesselate again. This could be done with the offset_x and offset_y variables.
+
+Disolve the shapes by cohort
+
+```{r}
+
+cohort_1 <- rgeos::gUnaryUnion(hex_grid2[hex_grid2@data$group == 1,], )
+cohort_2 <- rgeos::gUnaryUnion(hex_grid2[hex_grid2@data$group == 2,], )
+cohort_3 <- rgeos::gUnaryUnion(hex_grid2[hex_grid2@data$group == 3,], )
+cohort_4 <- rgeos::gUnaryUnion(hex_grid2[hex_grid2@data$group == 4,], )
+ggplot(hex_grid2_gg) + 
+  geom_polygon(aes(long, lat, group = id, fill = as.factor(org), alpha = 1/cohort), colour = "black") +
+  geom_text(data = hex_grid2@data, aes(label = rank, x = x1, y = y1)) +
+  geom_polygon(data = cohort_1, aes(long, lat, group=group), 
+               colour = "black", size =1,  fill = NA) +
+  geom_polygon(data = cohort_2, aes(long, lat, group=group), 
+               colour = "black", size =1,  fill = NA) +
+  geom_polygon(data = cohort_3, aes(long, lat, group=group), 
+               colour = "black", size =1,  fill = NA) 
+```
+
+This looks at the offset variables
+
+```{r}
+hex_grid3 <- hex_grid
+hex_grid3@data <- hex_grid3@data |> 
+  dplyr::select(id, offset_x, offset_y, tessellate)
+
+hex_grid3@data$centre <- hex_grid3@data$id == hex_grid_centre_id
+
+centre_coords <- hex_grid3@data |>
+  dplyr::filter(centre == TRUE) |>
+  dplyr::select(offset_x, offset_y)
+
+hex_grid3@data$offset_x2 <- centre_coords$offset_x
+hex_grid3@data$offset_y2 <- centre_coords$offset_y
+
+hex_grid3@data <- cbind(
+  hex_grid3@data, 
+  rgeos::gCentroid(hex_grid3, byid = TRUE) |> 
+    as.data.frame()
+  )
+
+hex_grid3@data <- hex_grid3@data |>
+  dplyr::mutate(x1 = ifelse(tessellate == TRUE, offset_x + 0.5 , offset_x),
+                y1 = offset_y) |>
+  dplyr::mutate(x2 = ifelse(centre == TRUE, x1, NA),
+                y2 = ifelse(centre == TRUE, y1, NA)) |>
+  tidyr::fill(c(x2,y2), .direction = "updown") |>
+  dplyr::mutate(distance = d(x1, x2, y1, y2)) |>
+  dplyr::mutate(rank  = rank(distance, ties = "first"))
+
+ggplot(hex_grid3) +
+  geom_polygon(aes(long, lat, group = group), fill = NA, colour = "black") +
+  geom_text(data = hex_grid3@data, aes(x, y, label = rank))
+
+hex_grid32 <- hex_grid3
+hex_grid32@data <- hex_grid32@data |>
+  dplyr::left_join(
+    df, by = c("rank" = "id")
+  ) |>
+  dplyr::rename(cohort = group)
+
+hex_grid32 <- hex_grid32[!is.na(hex_grid32@data$cohort),]
+hex_grid32f <- fortify(hex_grid32) |>
+ dplyr::left_join(hex_grid32@data |>
+                     dplyr::mutate(id = as.character(id)) |>
+                     dplyr:::select(id, cohort, rank, org))
+
+ggplot(hex_grid32f) +
+  geom_polygon(aes(long, lat, group = group, fill = cohort), colour = "black") +
+  geom_text(data = hex_grid32@data, aes(x, y, label = rank))
+
+cohort_groups <- (hex_grid32@data$cohort |> unique())[-1] |>
+  purrr::map_df(~{
+    x <- hex_grid32[hex_grid32@data$cohort == .x,]
+    rgeos::gUnaryUnion(x) |>
+      fortify() |>
+      dplyr::mutate(cohort = .x) |>
+      dplyr::mutate(group = paste0(cohort, ".", group))
+  })
+
+ggplot(hex_grid32f) +
+  geom_polygon(aes(long, lat, group = group, fill = as.factor(cohort), alpha = cohort != 4), 
+               colour = "grey") +
+  geom_text(data = hex_grid32@data, aes(x, y, label = rank, alpha = cohort != 4)) +
+  geom_polygon(data = cohort_groups, 
+               aes(long, lat, group = group), 
+               colour = "black", size = 1,
+               fill = NA) +
+  scale_fill_viridis_d() +
+  coord_cartesian() +
+  theme_void()
+```
