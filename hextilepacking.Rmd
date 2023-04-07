@@ -1,22 +1,22 @@
 ---
 title: "R Notebook"
-output: html_notebook
-editor_options: 
+output:
+  html_document:
+    df_print: paged
+editor_options:
   chunk_output_type: console
 ---
 
-```{r, include = FALSE}
-for(file in list.files("R")) source(file.path("R", file))
+```{r, include = TRUE}
 library(sp)
 library(ggplot2)
 ```
 
 # Objective
 
-Create a diagram of tessellated hexagons the ranks hexagon tiles based on their
-distance from the centre.
+Create a diagram of tessellated hexagons the ranks hexagon tiles based on their distance from the centre.
 
-# Data 
+# Data
 
 Dummy data
 
@@ -41,13 +41,51 @@ Create a grid of hexagon
 dx <- ceiling(sqrt(nrow(df)))
 dy <- dx
 
+## Helper functions
+deg2rad <- function(deg) {(deg * pi) / (180)} # Function to convert degrees to radians 
+hex_side <- function(area) {(3^0.25)*sqrt(2*(area/9))} # Get the length of a side of hexagon for a given area
+hex_area <- function(side) ((3*sqrt(3))/2*side) # Get the area of a hexagon given its side length
+
+# Function to draw a hexagon
+draw_hex <- function(area=hex_area(1), offset_x = 0, offset_y = 0, id=1, tessellate=F){
+  side_length <- hex_side(area)
+  A <- sin(deg2rad(30)) * side_length
+  B <- sin(deg2rad(60)) * side_length
+  C <- side_length
+  
+  (x <- c(0, 0, B, 2*B, 2*B, B) + (offset_x*B*2) + ifelse(tessellate == T,  B, 0))
+  (y <- c(A+C, A, 0, A, A+C, 2*C) + (offset_y*(A+C)))
+  
+  
+  sp::Polygons(list(sp::Polygon(coords = matrix(c(x,y),ncol=2),hole = F)),ID=id)
+}
+
+
+# Draw a grid of hexagon tiles
+draw_hexTiles <- function(area, offset_x_start=0, offset_x_end=4, offset_y_start=0, offset_y_end =4){
+  grid <- expand.grid(offset_x_start:offset_x_end, offset_y_start:offset_y_end)
+  grid$tessellate <- grid[,2] %% 2 == 0
+  
+  hexes <- sp::SpatialPolygons(lapply(1:nrow(grid), function(i){
+    draw_hex(area, offset_x = grid[i,1], offset_y = grid[i,2], id =i, tessellate = grid[i,3])
+    
+  }))
+  
+  names(grid) <- c("offset_x", "offset_y", "tessellate")
+  
+  grid <- data.frame(id = 1:nrow(grid),grid)
+  
+  sp::SpatialPolygonsDataFrame(hexes, grid)
+}
+
+
 cellsize <- 1
 C <- hex_side(cellsize)
 A <- sin(deg2rad(30)) * C
 B <- sin(deg2rad(60)) * C
 
-hexAcross <- ceiling(dx/(B*2)) # This calculation may not be necessary could just use dx
-hexUp <- ceiling(dy/((A+C)))
+hexAcross <- dx
+hexUp <- dy
 
 offset_x_start <- 0
 offset_y_start <- 0
@@ -71,7 +109,6 @@ Calculate the distance of each tile from the centre.
 grid_centre <- rgeos::gCentroid(hex_grid)
 hex_grid_centre_id <- over(grid_centre, hex_grid)$id
 hex_grid_centre <- hex_grid[hex_grid@data$id == hex_grid_centre_id ,]
-plot(rgeos::gCentroid(hex_grid_centre), add = TRUE)
 
 # get centroids of hexes
 hex_grid_centroids <- rgeos::gCentroid(hex_grid, byid = TRUE) |> 
